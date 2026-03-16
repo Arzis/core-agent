@@ -1,0 +1,20 @@
+因为 LangGraph 中 PostgresStore 需要使用到 pgvector，
+因此需要在docker容器中按照如下步骤进行操作，直接使用Docker Desktop软件中进行操作
+
+1、安装依赖
+apt update
+apt install -y git build-essential postgresql-server-dev-15
+
+2、编译并安装 pgvector
+git clone --branch v0.7.0 https://github.com/pgvector/pgvector.git
+cd pgvector
+make
+make install
+
+3、验证安装，检查扩展文件是否安装成功
+
+```shell
+ls -l /usr/share/postgresql/15/extension/vector*
+```
+
+最后一行显示：**`/usr/share/postgresql/15/extension/vector.control`** 表示安装成功！
