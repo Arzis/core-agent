@@ -8,6 +8,7 @@
   - 循环 (Cycle): 质量不达标时重试
 """
 import time
+import uuid
 from typing import Dict, Any, Optional
 
 from langgraph.graph import StateGraph, END, START
@@ -214,12 +215,34 @@ class RAGGraphExecutor:
         logger.info("🔨 构建 RAG Graph...")
 
         self.graph = build_rag_graph()
+        self.enable_checkpointing = enable_checkpointing
 
         # ★ 检查点: 支持中断恢复 & 历史回放
         self.checkpointer = MemorySaver() if enable_checkpointing else None
         self.compiled = self.graph.compile(checkpointer=self.checkpointer)
 
         logger.info("✅ RAG Graph 编译完成")
+
+    def _build_config(self, thread_id: str = None) -> dict:
+        """
+        构造 LangGraph 执行配置
+
+        ★ 核心修复:
+          - 如果启用了 checkpointer, 必须提供 thread_id
+          - 如果调用方没传, 自动生成一个临时 thread_id
+        """
+        if not self.enable_checkpointing:
+            return {}
+
+        # 没传 thread_id → 自动生成 (每次查询独立, 不共享历史)
+        if thread_id is None:
+            thread_id = f"rag_{uuid.uuid4().hex[:8]}"
+
+        return {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
 
     def invoke(
         self,
@@ -237,11 +260,12 @@ class RAGGraphExecutor:
             forced_mode=mode,
         )
 
-        config = {}
-        if self.checkpointer and thread_id:
-            config["configurable"] = {"thread_id": thread_id}
+        config = self._build_config(thread_id)
 
-        logger.info(f"▶ 执行 RAG Graph: query='{query[:50]}', budget={budget_ms}ms")
+        logger.info(
+            f"▶ 执行 RAG Graph: query='{query[:50]}', "
+            f"budget={budget_ms}ms, thread={config.get('configurable', {}).get('thread_id', 'N/A')}"
+        )
         start = time.perf_counter()
 
         final_state = self.compiled.invoke(initial_state, config=config)
@@ -271,6 +295,7 @@ class RAGGraphExecutor:
         query: str,
         budget_ms: float = 3000,
         mode: str = None,
+        thread_id: str = None,
     ):
         """
         ★ 流式执行: 逐步输出每个节点的结果
@@ -280,15 +305,22 @@ class RAGGraphExecutor:
             query=query, budget_ms=budget_ms, forced_mode=mode,
         )
 
+        # ★ 修复: 同样使用统一方法
+        config = self._build_config(thread_id)
+
         logger.info(f"▶ 流式执行 RAG Graph: '{query[:50]}'")
 
-        for event in self.compiled.stream(initial_state, stream_mode="updates"):
+        for event in self.compiled.stream(
+                initial_state,
+                config=config,
+                stream_mode="updates",
+        ):
             for node_name, node_output in event.items():
                 timings = node_output.get("step_timings", [])
                 for t in timings:
-                    status_icon = {"success": "✅", "skipped": "⏭️", "failed": "❌"}.get(t["status"], "❓")
+                    icon = {"success": "✅", "skipped": "⏭️", "failed": "❌"}.get(t["status"], "❓")
                     console.print(
-                        f"  {status_icon} [cyan]{t['name']:.<30}[/cyan] "
+                        f"  {icon} [cyan]{t['name']:.<30}[/cyan] "
                         f"[magenta]{t['duration_ms']:>7.1f}ms[/magenta]  "
                         f"[dim]{t.get('metadata', {})}[/dim]"
                     )

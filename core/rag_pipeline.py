@@ -152,9 +152,6 @@ class EnterpriseRAGPipeline:
                 answer="系统错误: 知识库未初始化, 请先构建知识库。",
             )
 
-        if thread_id is None:
-            thread_id = str(uuid.uuid4())[:8]
-
         result = self.graph_executor.invoke(
             query=question,
             budget_ms=budget_ms,
@@ -177,17 +174,22 @@ class EnterpriseRAGPipeline:
             metadata=result,
         )
 
-    def stream_query(self, question: str, mode: str = None, budget_ms: float = 3000):
+    def stream_query(self, question: str, mode: str = None, budget_ms: float = 3000, thread_id: str = None):
         """
         ★ 流式查询: 实时输出每个节点的处理结果
         适合前端 SSE / WebSocket 场景
         """
-        console.print(f"\n[bold]🔍 流式查询: {question}[/bold]\n")
-        final = {}
-        for event in self.graph_executor.stream(question, budget_ms, mode):
-            final = event.get("output", {})
+        if not self.vector_store.is_ready():
+            yield {"error": "知识库未初始化"}
+            return
+
+        for event in self.graph_executor.stream(
+                question,
+                budget_ms,
+                mode,
+                thread_id=thread_id,  # ★ 传递给 executor
+        ):
             yield event
-        return final
 
     def fast_query(self, question: str) -> RAGResult:
         return self.query(question, mode="fast", budget_ms=1000)
